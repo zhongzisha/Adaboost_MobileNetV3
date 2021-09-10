@@ -3,12 +3,13 @@ import sys,os
 import numpy as np
 from numpy.core.umath_tests import inner1d
 from copy import deepcopy
-
+import tensorflow
 # kerase & CNN:
 # from keras import models as Models
 from tensorflow.keras.models import Sequential
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.models import load_model
+import gc
 
 
 class AdaBoostClassifier(object):
@@ -99,7 +100,6 @@ class AdaBoostClassifier(object):
         self.log_dir = log_dir
         self.classes_ = classes
 
-
     def _samme_proba(self, estimator_filename, n_classes, X):
         """Calculate algorithm 4, step 2, equation c) of Zhu et al [1].
 
@@ -109,8 +109,10 @@ class AdaBoostClassifier(object):
 
         """
         estimator = load_model(estimator_filename)
-        proba = estimator.predict(X)
+        proba = estimator.predict(X, batch_size=self.batch_size)
+        tensorflow.keras.backend.clear_session()
         del estimator
+        gc.collect()
 
         # Displace zero probabilities so the log is defined.
         # Also fix negative elements which may occur with
@@ -122,17 +124,21 @@ class AdaBoostClassifier(object):
                                   * log_proba.sum(axis=1)[:, np.newaxis])
 
     def _helper(self, estimator_filename, X, classes, w):
+
         estimator = load_model(estimator_filename)
-
-        result = (estimator.predict(X).argmax(axis=1) == classes).T * w
-
+        result = (estimator.predict(X, batch_size=self.batch_size).argmax(axis=1) == classes).T * w
         del estimator
+        tensorflow.keras.backend.clear_session()
+        gc.collect()
+
         return result
 
     def _helper2(self, estimator_filename, X, w):
         estimator = load_model(estimator_filename)
-        result = estimator.predict(X) * w
+        result = estimator.predict(X, batch_size=self.batch_size) * w
+        tensorflow.keras.backend.clear_session()
         del estimator
+        gc.collect()
 
         return result
 
@@ -155,6 +161,8 @@ class AdaBoostClassifier(object):
         for iboost in range(self.n_estimators_):
             if iboost == 0:
                 sample_weight = np.ones(self.n_samples) / self.n_samples
+
+            print(iboost, '++'*20)
 
             sample_weight, estimator_weight, estimator_error = self.boost(X, y, sample_weight)
 
@@ -180,7 +188,6 @@ class AdaBoostClassifier(object):
     def real_boost(self, X, y, sample_weight):
         #            estimator = deepcopy(self.base_estimator_)
         ############################################### my code:
-
         estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
         ###################################################
         if self.random_state_:
@@ -201,9 +208,18 @@ class AdaBoostClassifier(object):
         print('y_b', y_b.shape)
         print('sample_weight', sample_weight.shape)
 
-        estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs, batch_size=self.batch_size)
+        print('fitting estimator')
+        estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs, batch_size=self.batch_size, verbose=1)
+        print('saving estimator')
+        estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
+        estimator.save(estimator_filename)
         ############################################################
-        y_pred = estimator.predict(X)
+        print('predict estimator')
+        y_pred = estimator.predict(X, batch_size=self.batch_size // 2, verbose=1)
+        tensorflow.keras.backend.clear_session()
+        del estimator
+        gc.collect()
+
         ############################################ (4) CNN :
         print('y_pred', y_pred.shape)
         y_pred_l = np.argmax(y_pred, axis=1)
@@ -219,7 +235,7 @@ class AdaBoostClassifier(object):
         if estimator_error >= 1.0 - 1 / self.n_classes_:
             return None, None, None
 
-        y_predict_proba = estimator.predict(X)
+        y_predict_proba = y_pred  # estimator.predict(X, batch_size=self.batch_size)
 
         # repalce zero
         y_predict_proba[y_predict_proba < np.finfo(y_predict_proba.dtype).eps] = np.finfo(y_predict_proba.dtype).eps
@@ -242,31 +258,34 @@ class AdaBoostClassifier(object):
         # normalize sample weight
         sample_weight /= sample_weight_sum
 
-        estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
-        estimator.save(estimator_filename)
-
         # append the estimator
         self.estimators_.append(estimator_filename)
 
         return sample_weight, 1, estimator_error
 
     def deepcopy_CNN(self, base_estimator0_filename):
+        print('invoke deepcopy_CNN')
+        tensorflow.keras.backend.clear_session()
 
         base_estimator0 = load_model(base_estimator0_filename)
         # Copy CNN (self.base_estimator_) to estimator:
         config = base_estimator0.get_config()
         # estimator = Models.model_from_config(config)
         estimator = Sequential.from_config(config)
+        # print('config', config)
 
         weights = base_estimator0.get_weights()
         estimator.set_weights(weights)
         estimator.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
         del base_estimator0
+        tensorflow.keras.backend.clear_session()
 
-        estimator.summary()
+        # estimator.summary()
 
         return estimator
+
+        # return base_estimator0  # estimator
 
     def discrete_boost(self, X, y, sample_weight):
         #        estimator = deepcopy(self.base_estimator_)

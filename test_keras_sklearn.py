@@ -1,4 +1,4 @@
-import sys,os
+import sys,os,pickle
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 from tensorflow.keras.layers import Input
@@ -44,8 +44,6 @@ import models
 # print(train_generator.class_indices)
 # print(train_generator.image_shape)
 
-import numpy as np
-
 # #####randome seed:
 # seed = 100
 seed = 50
@@ -54,6 +52,16 @@ np.random.seed(seed)
 # from tensorflow import set_random_seed
 # set_random_seed(seed)
 import tensorflow
+
+gpus = tensorflow.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tensorflow.config.experimental.set_memory_growth(gpu, True)
+
+    except RuntimeError as e:
+        print(e)
+
 tensorflow.random.set_seed(seed)
 # # ####
 import pandas as pd
@@ -211,7 +219,21 @@ def main():
     batch_size = 64
     input_shape = (224, 224, 3)
     # load dataset
-    trainX, trainY, testX, testY = load_dataset()
+    data_filename = './data.pickle'   # os.path.join(log_dir, 'data.pickle')
+    if os.path.exists(data_filename):
+        with open(data_filename, 'rb') as fp:
+            data = pickle.load(fp)
+        trainX = data['trainX']
+        trainY = data['trainY']
+        testX = data['testX']
+        testY = data['testY']
+    else:
+        trainX, trainY, testX, testY = load_dataset()
+        with open(data_filename, 'wb') as fp:
+            pickle.dump({"trainX": trainX,
+                         "trainY": trainY,
+                         "testX": testX,
+                         "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
     # prepare pixel data
     # trainX, testX = prep_pixels(trainX, testX)
     # define model
@@ -240,7 +262,7 @@ def main():
         from multi_adaboost_CNN import AdaBoostClassifier as Ada_CNN
 
         n_estimators = 5
-        epochs = 10
+        epochs = 20
         bdt_real_test_CNN = Ada_CNN(
             base_estimator=models.VGG_Block_3_with_Dropout_BN(input_shape=input_shape, num_classes=num_classes),
             n_estimators=n_estimators,
@@ -261,10 +283,10 @@ def main():
         print('\n Testing accuracy of bdt_real_test_CNN (AdaBoost+CNN): {}'.format(
             accuracy_score(bdt_real_test_CNN.predict(testX), testY)))
 
-    if False:
+    if True:
 
         train_CNN(model_func=models.VGG_Block_3_with_Dropout_BN,
-                  X_train=trainX, y_train=trainY, epochs=50,
+                  X_train=trainX, y_train=trainY, epochs=100,
                   batch_size=batch_size, X_test=testX, y_test=testY,
                   seed=seed, input_shape=input_shape, num_classes=num_classes)
 
