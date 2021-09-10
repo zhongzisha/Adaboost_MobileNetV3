@@ -1,5 +1,5 @@
 __author__ = 'Xin, Aboozar'
-import sys,os
+
 import numpy as np
 from numpy.core.umath_tests import inner1d
 from copy import deepcopy
@@ -8,7 +8,6 @@ from copy import deepcopy
 # from keras import models as Models
 from tensorflow.keras.models import Sequential
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
-from tensorflow.keras.models import load_model
 
 
 class AdaBoostClassifier(object):
@@ -53,9 +52,7 @@ class AdaBoostClassifier(object):
                 '''AdaBoostClassifier can only be called with keyword
                    arguments for the following keywords: base_estimator ,n_estimators,
                     learning_rate,algorithm,random_state''')
-        allowed_keys = ['base_estimator', 'n_estimators', 'learning_rate',
-                        'algorithm', 'random_state', 'epochs', 'log_dir',
-                        'classes']
+        allowed_keys = ['base_estimator', 'n_estimators', 'learning_rate', 'algorithm', 'random_state', 'epochs']
         keywords_used = kwargs.keys()
         for keyword in keywords_used:
             if keyword not in allowed_keys:
@@ -67,8 +64,6 @@ class AdaBoostClassifier(object):
         random_state = None
         #### CNN (5)
         epochs = 6
-        log_dir = '.'
-        classes = ("0", "1")
 
         if kwargs and not args:
             if 'base_estimator' in kwargs:
@@ -81,26 +76,19 @@ class AdaBoostClassifier(object):
             if 'random_state' in kwargs: random_state = kwargs.pop('random_state')
             ### CNN:
             if 'epochs' in kwargs: epochs = kwargs.pop('epochs')
-            if 'log_dir' in kwargs: log_dir = kwargs.pop('log_dir')
-            if 'classes' in kwargs: classes = kwargs.pop('classes')
 
         self.base_estimator_ = base_estimator
         self.n_estimators_ = n_estimators
         self.learning_rate_ = learning_rate
         self.algorithm_ = algorithm
         self.random_state_ = random_state
-        self.estimators_ = [os.path.join(log_dir, 'model_0.h5')]
+        self.estimators_ = list()
         self.estimator_weights_ = np.zeros(self.n_estimators_)
         self.estimator_errors_ = np.ones(self.n_estimators_)
 
-        self.base_estimator_.save(self.estimators_[0])
-
         self.epochs = epochs
-        self.log_dir = log_dir
-        self.classes_ = classes
 
-
-    def _samme_proba(self, estimator_filename, n_classes, X):
+    def _samme_proba(self, estimator, n_classes, X):
         """Calculate algorithm 4, step 2, equation c) of Zhu et al [1].
 
         References
@@ -108,9 +96,7 @@ class AdaBoostClassifier(object):
         .. [1] J. Zhu, H. Zou, S. Rosset, T. Hastie, "Multi-class AdaBoost", 2009.
 
         """
-        estimator = load_model(estimator_filename)
         proba = estimator.predict(X)
-        del estimator
 
         # Displace zero probabilities so the log is defined.
         # Also fix negative elements which may occur with
@@ -121,21 +107,6 @@ class AdaBoostClassifier(object):
         return (n_classes - 1) * (log_proba - (1. / n_classes)
                                   * log_proba.sum(axis=1)[:, np.newaxis])
 
-    def _helper(self, estimator_filename, X, classes, w):
-        estimator = load_model(estimator_filename)
-
-        result = (estimator.predict(X).argmax(axis=1) == classes).T * w
-
-        del estimator
-        return result
-
-    def _helper2(self, estimator_filename, X, w):
-        estimator = load_model(estimator_filename)
-        result = estimator.predict(X) * w
-        del estimator
-
-        return result
-
     def fit(self, X, y, batch_size):
 
         ## CNN:
@@ -145,6 +116,8 @@ class AdaBoostClassifier(object):
         self.n_samples = X.shape[0]
         # There is hidden trouble for classes, here the classes will be sorted.
         # So in boost we have to ensure that the predict results have the same classes sort
+
+        self.classes_ = np.unique(y)
 
         ############for CNN (2):
         #        yl = np.argmax(y)
@@ -181,7 +154,12 @@ class AdaBoostClassifier(object):
         #            estimator = deepcopy(self.base_estimator_)
         ############################################### my code:
 
-        estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
+        if len(self.estimators_) == 0:
+            # Copy CNN to estimator:
+            estimator = self.deepcopy_CNN(self.base_estimator_)  # deepcopy of self.base_estimator_
+        else:
+            # estimator = deepcopy(self.estimators_[-1])
+            estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
         ###################################################
         if self.random_state_:
             estimator.set_params(random_state=1)
@@ -242,17 +220,12 @@ class AdaBoostClassifier(object):
         # normalize sample weight
         sample_weight /= sample_weight_sum
 
-        estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
-        estimator.save(estimator_filename)
-
         # append the estimator
-        self.estimators_.append(estimator_filename)
+        self.estimators_.append(estimator)
 
         return sample_weight, 1, estimator_error
 
-    def deepcopy_CNN(self, base_estimator0_filename):
-
-        base_estimator0 = load_model(base_estimator0_filename)
+    def deepcopy_CNN(self, base_estimator0):
         # Copy CNN (self.base_estimator_) to estimator:
         config = base_estimator0.get_config()
         # estimator = Models.model_from_config(config)
@@ -262,17 +235,18 @@ class AdaBoostClassifier(object):
         estimator.set_weights(weights)
         estimator.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-        del base_estimator0
-
-        estimator.summary()
-
         return estimator
 
     def discrete_boost(self, X, y, sample_weight):
         #        estimator = deepcopy(self.base_estimator_)
         ############################################### my code:
 
-        estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
+        if len(self.estimators_) == 0:
+            # Copy CNN to estimator:
+            estimator = self.deepcopy_CNN(self.base_estimator_)  # deepcopy of self.base_estimator_
+        else:
+            # estimator = deepcopy(self.estimators_[-1])
+            estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
         ###################################################
 
         if self.random_state_:
@@ -320,11 +294,8 @@ class AdaBoostClassifier(object):
         # normalize sample weight
         sample_weight /= sample_weight_sum
 
-        estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
-        estimator.save(estimator_filename)
-
         # append the estimator
-        self.estimators_.append(estimator_filename)
+        self.estimators_.append(estimator)
 
         return sample_weight, estimator_weight, estimator_error
 
@@ -341,7 +312,7 @@ class AdaBoostClassifier(object):
             #                       for estimator, w in zip(self.estimators_,
             #                                               self.estimator_weights_))
             ########################################CNN disc
-            pred = sum(self._helper(estimator, X, classes, w)
+            pred = sum((estimator.predict(X).argmax(axis=1) == classes).T * w
                        for estimator, w in zip(self.estimators_,
                                                self.estimator_weights_))
         ###########################################################
@@ -360,7 +331,7 @@ class AdaBoostClassifier(object):
             proba = sum(self._samme_proba(estimator, self.n_classes_, X)
                         for estimator in self.estimators_)
         else:  # self.algorithm == "SAMME"
-            proba = sum(self._helper2(estimator, X, w)
+            proba = sum(estimator.predict(X) * w
                         for estimator, w in zip(self.estimators_,
                                                 self.estimator_weights_))
 

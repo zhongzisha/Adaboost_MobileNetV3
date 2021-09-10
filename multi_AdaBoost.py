@@ -77,7 +77,6 @@ class AdaBoostClassifier(object):
         self.estimator_weights_ = np.zeros(self.n_estimators_)
         self.estimator_errors_ = np.ones(self.n_estimators_)
 
-
     def _samme_proba(self, estimator, n_classes, X):
         """Calculate algorithm 4, step 2, equation c) of Zhu et al [1].
 
@@ -86,7 +85,7 @@ class AdaBoostClassifier(object):
         .. [1] J. Zhu, H. Zou, S. Rosset, T. Hastie, "Multi-class AdaBoost", 2009.
 
         """
-        proba = estimator.predict_proba(X)
+        proba = estimator.predict(X)
 
         # Displace zero probabilities so the log is defined.
         # Also fix negative elements which may occur with
@@ -96,7 +95,6 @@ class AdaBoostClassifier(object):
 
         return (n_classes - 1) * (log_proba - (1. / n_classes)
                                   * log_proba.sum(axis=1)[:, np.newaxis])
-
 
     def fit(self, X, y):
         self.n_samples = X.shape[0]
@@ -123,7 +121,6 @@ class AdaBoostClassifier(object):
 
         return self
 
-
     def boost(self, X, y, sample_weight):
         if self.algorithm_ == 'SAMME':
             return self.discrete_boost(X, y, sample_weight)
@@ -145,7 +142,7 @@ class AdaBoostClassifier(object):
         if estimator_error >= 1.0 - 1 / self.n_classes_:
             return None, None, None
 
-        y_predict_proba = estimator.predict_proba(X)
+        y_predict_proba = estimator.predict(X)
         # repalce zero
         y_predict_proba[y_predict_proba < np.finfo(y_predict_proba.dtype).eps] = np.finfo(y_predict_proba.dtype).eps
 
@@ -155,7 +152,7 @@ class AdaBoostClassifier(object):
         # for sample weight update
         intermediate_variable = (-1. * self.learning_rate_ * (((self.n_classes_ - 1) / self.n_classes_) *
                                                               inner1d(y_coding, np.log(
-                                                                  y_predict_proba))))  #dot iterate for each row
+                                                                  y_predict_proba))))  # dot iterate for each row
 
         # update sample weight
         sample_weight *= np.exp(intermediate_variable)
@@ -171,7 +168,6 @@ class AdaBoostClassifier(object):
         self.estimators_.append(estimator)
 
         return sample_weight, 1, estimator_error
-
 
     def discrete_boost(self, X, y, sample_weight):
         estimator = deepcopy(self.base_estimator_)
@@ -189,9 +185,10 @@ class AdaBoostClassifier(object):
             return None, None, None
 
         # update estimator_weight
-#        estimator_weight = self.learning_rate_ * np.log((1. - estimator_error) / estimator_error) + np.log(
-#            self.n_classes_ - 1.)
-        estimator_weight = self.learning_rate_ * (np.log((1. - estimator_error) / estimator_error) + np.log(self.n_classes_ - 1.))
+        #        estimator_weight = self.learning_rate_ * np.log((1. - estimator_error) / estimator_error) + np.log(
+        #            self.n_classes_ - 1.)
+        estimator_weight = self.learning_rate_ * (
+                    np.log((1. - estimator_error) / estimator_error) + np.log(self.n_classes_ - 1.))
 
         if estimator_weight <= 0:
             return None, None, None
@@ -232,14 +229,14 @@ class AdaBoostClassifier(object):
 
         return self.classes_.take(np.argmax(pred, axis=1), axis=0)
 
-
     def predict_proba(self, X):
+        n_classes = self.n_classes_
         if self.algorithm_ == 'SAMME.R':
             # The weights are all 1. for SAMME.R
             proba = sum(self._samme_proba(estimator, self.n_classes_, X)
                         for estimator in self.estimators_)
         else:  # self.algorithm == "SAMME"
-            proba = sum(estimator.predict_proba(X) * w
+            proba = sum(estimator.predict(X) * w
                         for estimator, w in zip(self.estimators_,
                                                 self.estimator_weights_))
 
