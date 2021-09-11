@@ -11,13 +11,7 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 from sklearn.metrics import accuracy_score
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-
-import mmcv
-from mmcls.datasets import build_dataset, build_dataloader
-
 import numpy as np
-
-import models
 
 
 # class_names = ('nontower', 'normal', 'jieduan', 'wanzhe')
@@ -70,6 +64,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.datasets import cifar10
+import math
 
 import models
 
@@ -114,9 +109,18 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
     tensorflow.random.set_seed(seed)
     # set_random_seed(seed)
 
+    def lr_step_decay(epoch, lr):
+        drop_rate = 0.997
+        epochs_drop = 2
+        return 0.008 * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+
+    lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
+
     # fit model
+    # history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size,
+    #                     validation_data=(X_test, y_test_b), verbose=1)
     history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size, validation_data=(X_test, y_test_b),
-                        verbose=1)
+                        callbacks=[lr_callback], verbose=1)
 
     # evaluate model
     _, acc = model.evaluate(X_test, y_test_b, verbose=0)
@@ -132,6 +136,8 @@ def load_dataset():
     # # trainY = to_categorical(trainY)
     # # testY = to_categorical(testY)
     # return trainX, trainY, testX, testY
+    import mmcv
+    from mmcls.datasets import build_dataset, build_dataloader
 
     config_filename = './ganta_with_tower_state_bs32_forTest.py'
     cfg = mmcv.Config.fromfile(config_filename)
@@ -212,51 +218,67 @@ def prep_pixels(train, test):
 
 
 def main():
-    log_dir = sys.argv[1]
+    arch = sys.argv[1]
+    dataset_name = sys.argv[2]
+    train_adaboost_cnn = int(sys.argv[3])
+    log_dir = os.path.join('logs', dataset_name, arch)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    batch_size = 64
-    input_shape = (224, 224, 3)
-    # load dataset
-    data_filename = './data.pickle'   # os.path.join(log_dir, 'data.pickle')
-    if os.path.exists(data_filename):
-        with open(data_filename, 'rb') as fp:
-            data = pickle.load(fp)
-        trainX = data['trainX']
-        trainY = data['trainY']
-        testX = data['testX']
-        testY = data['testY']
+    trainX, trainY, testX, testY = None, None, None, None
+    if dataset_name == 'ganta':
+        batch_size = 256
+        input_shape = (224, 224, 3)
+        # load dataset
+        data_filename = './data.pickle'   # os.path.join(log_dir, 'data.pickle')
+        if os.path.exists(data_filename):
+            with open(data_filename, 'rb') as fp:
+                data = pickle.load(fp)
+            trainX = data['trainX']
+            trainY = data['trainY']
+            testX = data['testX']
+            testY = data['testY']
+        else:
+            trainX, trainY, testX, testY = load_dataset()
+            with open(data_filename, 'wb') as fp:
+                pickle.dump({"trainX": trainX,
+                             "trainY": trainY,
+                             "testX": testX,
+                             "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        # prepare pixel data
+        # trainX, testX = prep_pixels(trainX, testX)
+        # define model
+
+        print('trainX shape', trainX.shape)
+        print('trainY shape', trainY.shape)
+        print('testX shape', testX.shape)
+        print('testY shape', testY.shape)
+
+        if trainX.shape[0] / batch_size != 0:
+            extra_num = int(np.ceil(trainX.shape[0] / batch_size) * batch_size - trainX.shape[0])
+            trainX = np.concatenate([trainX, trainX[:extra_num, :]], axis=0)
+            trainY = np.concatenate([trainY, trainY[:extra_num]], axis=0)
+
+        print('trainX shape', trainX.shape)
+        print('trainY shape', trainY.shape)
+        print('testX shape', testX.shape)
+        print('testY shape', testY.shape)
+    elif dataset_name == 'cifar10':
+        (trainX, trainY), (testX, testY) = cifar10.load_data()
+        input_shape = (32, 32, 3)
+        batch_size = 32
     else:
-        trainX, trainY, testX, testY = load_dataset()
-        with open(data_filename, 'wb') as fp:
-            pickle.dump({"trainX": trainX,
-                         "trainY": trainY,
-                         "testX": testX,
-                         "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
-    # prepare pixel data
-    # trainX, testX = prep_pixels(trainX, testX)
-    # define model
-
-    print('trainX shape', trainX.shape)
-    print('trainY shape', trainY.shape)
-    print('testX shape', testX.shape)
-    print('testY shape', testY.shape)
-
-    if trainX.shape[0] / batch_size != 0:
-        extra_num = int(np.ceil(trainX.shape[0] / batch_size) * batch_size - trainX.shape[0])
-        trainX = np.concatenate([trainX, trainX[:extra_num, :]], axis=0)
-        trainY = np.concatenate([trainY, trainY[:extra_num]], axis=0)
-
-    print('trainX shape', trainX.shape)
-    print('trainY shape', trainY.shape)
-    print('testX shape', testX.shape)
-    print('testY shape', testY.shape)
+        print('wrong dataset')
+        sys.exit(-1)
 
     classes = np.unique(trainY)
     num_classes = len(classes)
+    if arch == 'MobileNetV3Small':
+        batch_size = 256
+    elif arch == 'MobileNetV3Large':
+        batch_size = 128
 
-    if True:
+    if train_adaboost_cnn == 1:
         # # # # # ###Adaboost+CNN:
 
         from multi_adaboost_CNN import AdaBoostClassifier as Ada_CNN
@@ -264,7 +286,7 @@ def main():
         n_estimators = 5
         epochs = 20
         bdt_real_test_CNN = Ada_CNN(
-            base_estimator=models.VGG_Block_3_with_Dropout_BN(input_shape=input_shape, num_classes=num_classes),
+            base_estimator=getattr(models, arch)(input_shape=input_shape, num_classes=num_classes),
             n_estimators=n_estimators,
             learning_rate=0.01,
             epochs=epochs,
@@ -283,12 +305,18 @@ def main():
         print('\n Testing accuracy of bdt_real_test_CNN (AdaBoost+CNN): {}'.format(
             accuracy_score(bdt_real_test_CNN.predict(testX), testY)))
 
-    if True:
+    else:
 
-        train_CNN(model_func=models.VGG_Block_3_with_Dropout_BN,
-                  X_train=trainX, y_train=trainY, epochs=100,
-                  batch_size=batch_size, X_test=testX, y_test=testY,
-                  seed=seed, input_shape=input_shape, num_classes=num_classes)
+        train_CNN(model_func=getattr(models, arch),    # models.VGG_Block_3_with_Dropout_BN,
+                  X_train=trainX,
+                  y_train=trainY,
+                  epochs=100,
+                  batch_size=batch_size,
+                  X_test=testX,
+                  y_test=testY,
+                  seed=seed,
+                  input_shape=input_shape,
+                  num_classes=num_classes)
 
 
 if __name__ == '__main__':

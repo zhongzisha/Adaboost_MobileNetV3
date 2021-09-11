@@ -9,7 +9,44 @@ import tensorflow
 from tensorflow.keras.models import Sequential
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.models import load_model
+from tensorflow.keras.callbacks import ModelCheckpoint
 import gc
+
+
+checkpoint_path = 'checkpoints'
+if not os.path.exists(checkpoint_path):
+    os.makedirs(checkpoint_path)
+
+ckpt_callback = ModelCheckpoint(filepath=os.path.join(checkpoint_path, 'weights.{epoch:02d}.{accuracy:.4f}.hdf5'),
+                                monitor='accuracy')
+
+
+# this is function to load weight file for resuming training from last epoch
+def checkpoint_function():
+    # if there is no file being saved in the checkpoint path then routine will go to loop model.fit(X, y, epochs=150, batch_size=1, callbacks=[ckpt_callback])
+    # this signifies that no file is saved in the checkpoint path and let us begin the training from the first epoch.
+    if not os.listdir(checkpoint_path):
+        return
+    # this loop will fetch epochs number in a list
+    files_int = list()
+    for i in os.listdir(checkpoint_path):
+        epoch = int(i.split('.')[1])
+        files_int.append(epoch)
+    # getting the maximum value for an epoch from the list
+    # this is reference value and will help to find the file with that value
+    max_value = max(files_int)
+    # conditions are applied to find the file which has the maximum value of epoch
+    # such file would be the last file where the training is stopped and we would like to resume the training from that point.
+    for i in os.listdir(checkpoint_path):
+        epoch = int(i.split('.')[1])
+        if epoch > max_value:
+            pass
+        elif epoch < max_value:
+            pass
+        else:
+            final_file = i
+            # in the end we will get the epoch as well as file
+    return final_file, max_value
 
 
 class AdaBoostClassifier(object):
@@ -90,11 +127,12 @@ class AdaBoostClassifier(object):
         self.learning_rate_ = learning_rate
         self.algorithm_ = algorithm
         self.random_state_ = random_state
-        self.estimators_ = [os.path.join(log_dir, 'model_0.h5')]
+        # self.estimators_ = [os.path.join(log_dir, 'model_0.h5')]
+        self.estimators_ = []
         self.estimator_weights_ = np.zeros(self.n_estimators_)
         self.estimator_errors_ = np.ones(self.n_estimators_)
 
-        self.base_estimator_.save(self.estimators_[0])
+        # self.base_estimator_.save(self.estimators_[0])
 
         self.epochs = epochs
         self.log_dir = log_dir
@@ -165,6 +203,7 @@ class AdaBoostClassifier(object):
             print(iboost, '++'*20)
 
             sample_weight, estimator_weight, estimator_error = self.boost(X, y, sample_weight)
+            print('sample_weight', sample_weight[:10])
 
             # early stop
             if estimator_error is None:
@@ -186,10 +225,13 @@ class AdaBoostClassifier(object):
             return self.real_boost(X, y, sample_weight)
 
     def real_boost(self, X, y, sample_weight):
-        #            estimator = deepcopy(self.base_estimator_)
-        ############################################### my code:
-        estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
-        ###################################################
+        max_value = None
+        if len(self.estimators_) == 0:
+            # Copy CNN to estimator:
+            estimator = self.base_estimator_
+        else:
+            # estimator = deepcopy(self.estimators_[-1])
+            estimator, max_value = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
         if self.random_state_:
             estimator.set_params(random_state=1)
         #        estimator.fit(X, y, sample_weight=sample_weight)
@@ -209,7 +251,15 @@ class AdaBoostClassifier(object):
         print('sample_weight', sample_weight.shape)
 
         print('fitting estimator')
-        estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs, batch_size=self.batch_size, verbose=1)
+        if max_value is None:
+            estimator.fit(X, y_b, sample_weight=sample_weight/np.min(sample_weight), epochs=self.epochs,
+                          callbacks=[ckpt_callback],
+                          batch_size=self.batch_size, verbose=1)
+        else:
+            estimator.fit(X, y_b, sample_weight=sample_weight/np.min(sample_weight), epochs=self.epochs + max_value,
+                          callbacks=[ckpt_callback], initial_epoch=max_value,
+                          batch_size=self.batch_size, verbose=1)
+
         print('saving estimator')
         estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
         estimator.save(estimator_filename)
@@ -225,7 +275,7 @@ class AdaBoostClassifier(object):
         y_pred_l = np.argmax(y_pred, axis=1)
         print('y_pred_l', y_pred_l.shape)
         incorrect = y_pred_l != y
-        print('incorrect', incorrect.shape)
+        print('incorrect', len(np.where(incorrect == True)[0]) / len(y))
         print('sample_weight', sample_weight.shape)
         #########################################################
         estimator_error = np.dot(incorrect, sample_weight) / np.sum(sample_weight, axis=0)
@@ -266,95 +316,57 @@ class AdaBoostClassifier(object):
     def deepcopy_CNN(self, base_estimator0_filename):
         print('invoke deepcopy_CNN')
         tensorflow.keras.backend.clear_session()
+        # ckpt_callback = ModelCheckpoint(filepath='weights.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss')
 
-        base_estimator0 = load_model(base_estimator0_filename)
-        # Copy CNN (self.base_estimator_) to estimator:
-        config = base_estimator0.get_config()
-        # estimator = Models.model_from_config(config)
-        estimator = Sequential.from_config(config)
-        # print('config', config)
+        # base_estimator0 = load_model(base_estimator0_filename)
 
-        weights = base_estimator0.get_weights()
-        estimator.set_weights(weights)
-        estimator.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+        # # print(base_estimator0.summary())
+        #
+        # # Copy CNN (self.base_estimator_) to estimator:
+        # config = base_estimator0.get_config()
+        # # estimator = Models.model_from_config(config)
+        # estimator = Sequential.from_config(config)
+        # # print('config', config)
+        #
+        # weights = base_estimator0.get_weights()
+        # estimator.set_weights(weights)
+        #
+        # opt = tensorflow.keras.optimizers.RMSprop(learning_rate=0.016,
+        #               rho=0.9,
+        #               momentum=0.9,
+        #               epsilon=0.0079)  # 0.0316
+        # # estimator.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+        # estimator.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
+        #
+        # del base_estimator0
+        # tensorflow.keras.backend.clear_session()
+        #
+        # # estimator.summary()
+        #
+        # return estimator
 
-        del base_estimator0
-        tensorflow.keras.backend.clear_session()
+        checkpoint_path_file = checkpoint_function()
+        # this is interesting loop of the code. Code has been divided into conditions here
+        # in the if condition if checkpoint is not none, then file and last epcoh is restored
+        # Such file is loaded using load_model and training start from that epoch
+        if checkpoint_path_file is not None:
+            # Load model:
+            checkpoint_path_file = checkpoint_function()[0]
+            max_value = checkpoint_function()[1]
 
-        # estimator.summary()
-
-        return estimator
-
-        # return base_estimator0  # estimator
-
-    def discrete_boost(self, X, y, sample_weight):
-        #        estimator = deepcopy(self.base_estimator_)
-        ############################################### my code:
-
-        estimator = self.deepcopy_CNN(self.estimators_[-1])  # deepcopy CNN
-        ###################################################
-
-        if self.random_state_:
-            estimator.set_params(random_state=1)
-        #        estimator.fit(X, y, sample_weight=sample_weight)
-        #################################### CNN (3) binery label:
-        # lb=LabelBinarizer()
-        # y_b = lb.fit_transform(y)
-
-        lb = OneHotEncoder(sparse=False)
-        y_b = y.reshape(len(y), 1)
-        y_b = lb.fit_transform(y_b)
-
-        estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs, batch_size=self.batch_size)
-        ############################################################
-        y_pred = estimator.predict(X)
-
-        # incorrect = y_pred != y
-        ############################################ (4) CNN :
-        y_pred_l = np.argmax(y_pred, axis=1)
-        incorrect = y_pred_l != y
-        #######################################################
-        estimator_error = np.dot(incorrect, sample_weight) / np.sum(sample_weight, axis=0)
-
-        # if worse than random guess, stop boosting
-        if estimator_error >= 1 - 1 / self.n_classes_:
-            return None, None, None
-
-        # update estimator_weight
-        #        estimator_weight = self.learning_rate_ * np.log((1 - estimator_error) / estimator_error) + np.log(
-        #            self.n_classes_ - 1)
-        estimator_weight = self.learning_rate_ * (
-                    np.log((1. - estimator_error) / estimator_error) + np.log(self.n_classes_ - 1.))
-
-        if estimator_weight <= 0:
-            return None, None, None
-
-        # update sample weight
-        sample_weight *= np.exp(estimator_weight * incorrect)
-
-        sample_weight_sum = np.sum(sample_weight, axis=0)
-        if sample_weight_sum <= 0:
-            return None, None, None
-
-        # normalize sample weight
-        sample_weight /= sample_weight_sum
-
-        estimator_filename = os.path.join(self.log_dir, 'model_%d.h5' % (len(self.estimators_)))
-        estimator.save(estimator_filename)
-
-        # append the estimator
-        self.estimators_.append(estimator_filename)
-
-        return sample_weight, estimator_weight, estimator_error
+            model = load_model(os.path.join(checkpoint_path, checkpoint_path_file))
+            # model.fit(X, y, epochs=150, batch_size=1, callbacks=[ckpt_callback], initial_epoch=max_value)
+            # if there is no checkpoint_path_file it means no file is saved and hence model will be trained from scratch
+            return model, max_value  # estimator
+        return None, None
 
     def predict(self, X):
-        n_classes = self.n_classes_
         classes = self.classes_[:, np.newaxis]
         pred = None
 
         if self.algorithm_ == 'SAMME.R':
             # The weights are all 1. for SAMME.R
-            pred = sum(self._samme_proba(estimator, n_classes, X) for estimator in self.estimators_)
+            pred = sum(self._samme_proba(estimator, self.n_classes_, X) for estimator in self.estimators_)
         else:  # self.algorithm == "SAMME"
             #            pred = sum((estimator.predict(X) == classes).T * w
             #                       for estimator, w in zip(self.estimators_,
@@ -365,7 +377,7 @@ class AdaBoostClassifier(object):
                                                self.estimator_weights_))
         ###########################################################
         pred /= self.estimator_weights_.sum()
-        if n_classes == 2:
+        if self.n_classes_ == 2:
             pred[:, 0] *= -1
             pred = pred.sum(axis=1)
             return self.classes_.take(pred > 0, axis=0)
