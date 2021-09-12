@@ -1,5 +1,6 @@
 __author__ = 'Xin, Aboozar'
-import sys,os
+
+import sys, os
 import numpy as np
 from numpy.core.umath_tests import inner1d
 from copy import deepcopy
@@ -7,26 +8,21 @@ import tensorflow
 # kerase & CNN:
 # from keras import models as Models
 from tensorflow.keras.models import Sequential
+import tensorflow
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import ModelCheckpoint
 import gc
-
-
-checkpoint_path = 'checkpoints'
-if not os.path.exists(checkpoint_path):
-    os.makedirs(checkpoint_path)
-
-ckpt_callback = ModelCheckpoint(filepath=os.path.join(checkpoint_path, 'weights.{epoch:02d}.{accuracy:.4f}.hdf5'),
-                                monitor='accuracy')
+import math
 
 
 # this is function to load weight file for resuming training from last epoch
-def checkpoint_function():
-    # if there is no file being saved in the checkpoint path then routine will go to loop model.fit(X, y, epochs=150, batch_size=1, callbacks=[ckpt_callback])
-    # this signifies that no file is saved in the checkpoint path and let us begin the training from the first epoch.
+def checkpoint_function(checkpoint_path):
+    # if there is no file being saved in the checkpoint path then routine will go to loop model.fit(X, y, epochs=150,
+    # batch_size=1, callbacks=[ckpt_callback]) this signifies that no file is saved in the checkpoint path and let us
+    # begin the training from the first epoch.
     if not os.listdir(checkpoint_path):
-        return
+        return None, None
     # this loop will fetch epochs number in a list
     files_int = list()
     for i in os.listdir(checkpoint_path):
@@ -35,8 +31,9 @@ def checkpoint_function():
     # getting the maximum value for an epoch from the list
     # this is reference value and will help to find the file with that value
     max_value = max(files_int)
-    # conditions are applied to find the file which has the maximum value of epoch
-    # such file would be the last file where the training is stopped and we would like to resume the training from that point.
+    # conditions are applied to find the file which has the maximum value of epoch such file would be the last file
+    # where the training is stopped and we would like to resume the training from that point.
+    final_file = None
     for i in os.listdir(checkpoint_path):
         epoch = int(i.split('.')[1])
         if epoch > max_value:
@@ -93,7 +90,7 @@ class AdaBoostClassifier(object):
                     learning_rate,algorithm,random_state''')
         allowed_keys = ['base_estimator', 'n_estimators', 'learning_rate',
                         'algorithm', 'random_state', 'epochs', 'log_dir',
-                        'classes']
+                        'classes', 'base_learning_rate']
         keywords_used = kwargs.keys()
         for keyword in keywords_used:
             if keyword not in allowed_keys:
@@ -107,6 +104,7 @@ class AdaBoostClassifier(object):
         epochs = 6
         log_dir = '.'
         classes = ("0", "1")
+        base_learning_rate = 0.016
 
         if kwargs and not args:
             if 'base_estimator' in kwargs:
@@ -121,6 +119,7 @@ class AdaBoostClassifier(object):
             if 'epochs' in kwargs: epochs = kwargs.pop('epochs')
             if 'log_dir' in kwargs: log_dir = kwargs.pop('log_dir')
             if 'classes' in kwargs: classes = kwargs.pop('classes')
+            if 'base_learning_rate' in kwargs: base_learning_rate = kwargs.pop('base_learning_rate')
 
         self.base_estimator_ = base_estimator
         self.n_estimators_ = n_estimators
@@ -137,6 +136,23 @@ class AdaBoostClassifier(object):
         self.epochs = epochs
         self.log_dir = log_dir
         self.classes_ = classes
+        self.base_learning_rate = base_learning_rate
+
+        checkpoint_path = os.path.join(log_dir, 'checkpoints')
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path)
+
+        self.ckpt_callback = ModelCheckpoint(filepath=os.path.join(checkpoint_path,
+                                                                   'weights.{epoch:02d}.{categorical_accuracy:.4f}.hdf5'),
+                                             monitor='categorical_accuracy')
+        self.checkpoint_path = checkpoint_path
+
+        def lr_step_decay(epoch, lr):
+            drop_rate = 0.997
+            epochs_drop = 3
+            return self.base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+
+        self.lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
 
     def _samme_proba(self, estimator_filename, n_classes, X):
         """Calculate algorithm 4, step 2, equation c) of Zhu et al [1].
@@ -196,14 +212,16 @@ class AdaBoostClassifier(object):
 
         self.n_classes_ = len(self.classes_)
         print('self.n_classes_', self.n_classes_)
+        sample_weight = None
         for iboost in range(self.n_estimators_):
             if iboost == 0:
                 sample_weight = np.ones(self.n_samples) / self.n_samples
 
-            print(iboost, '++'*20)
+            print(iboost, '++' * 20)
 
             sample_weight, estimator_weight, estimator_error = self.boost(X, y, sample_weight)
-            print('sample_weight', sample_weight[:10])
+            if sample_weight is not None:
+                print('sample_weight', sample_weight[:10])
 
             # early stop
             if estimator_error is None:
@@ -225,6 +243,8 @@ class AdaBoostClassifier(object):
             return self.real_boost(X, y, sample_weight)
 
     def real_boost(self, X, y, sample_weight):
+        if sample_weight is None:
+            sample_weight = np.ones(self.n_samples) / self.n_samples
         max_value = None
         if len(self.estimators_) == 0:
             # Copy CNN to estimator:
@@ -239,6 +259,15 @@ class AdaBoostClassifier(object):
         # lb=LabelBinarizer()
         # y_b = lb.fit_transform(y)
 
+        opt = tensorflow.keras.optimizers.RMSprop(learning_rate=self.base_learning_rate,
+                                                  rho=0.9,
+                                                  momentum=0.9,
+                                                  epsilon=0.0038,
+                                                  decay=1e-5)  # 0.0316
+        estimator.compile(optimizer=opt,  # Adam(learning_rate=0.001),
+                          loss='categorical_crossentropy',
+                          metrics=['categorical_accuracy'])
+
         print('X', X.shape)
         print('y', y.shape)
         y = y.squeeze()
@@ -251,13 +280,14 @@ class AdaBoostClassifier(object):
         print('sample_weight', sample_weight.shape)
 
         print('fitting estimator')
+
         if max_value is None:
-            estimator.fit(X, y_b, sample_weight=sample_weight/np.min(sample_weight), epochs=self.epochs,
-                          callbacks=[ckpt_callback],
+            estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs,
+                          callbacks=[self.ckpt_callback, self.lr_callback],
                           batch_size=self.batch_size, verbose=1)
         else:
-            estimator.fit(X, y_b, sample_weight=sample_weight/np.min(sample_weight), epochs=self.epochs + max_value,
-                          callbacks=[ckpt_callback], initial_epoch=max_value,
+            estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs + max_value,
+                          callbacks=[self.ckpt_callback, self.lr_callback], initial_epoch=max_value,
                           batch_size=self.batch_size, verbose=1)
 
         print('saving estimator')
@@ -265,7 +295,7 @@ class AdaBoostClassifier(object):
         estimator.save(estimator_filename)
         ############################################################
         print('predict estimator')
-        y_pred = estimator.predict(X, batch_size=self.batch_size // 2, verbose=1)
+        y_pred = estimator.predict(X, batch_size=self.batch_size, verbose=1)
         tensorflow.keras.backend.clear_session()
         del estimator
         gc.collect()
@@ -279,8 +309,11 @@ class AdaBoostClassifier(object):
         print('sample_weight', sample_weight.shape)
         #########################################################
         estimator_error = np.dot(incorrect, sample_weight) / np.sum(sample_weight, axis=0)
-
         print('estimator_error', estimator_error)
+
+        # import pdb
+        # pdb.set_trace()
+
         # if worse than random guess, stop boosting
         if estimator_error >= 1.0 - 1 / self.n_classes_:
             return None, None, None
@@ -315,7 +348,7 @@ class AdaBoostClassifier(object):
 
     def deepcopy_CNN(self, base_estimator0_filename):
         print('invoke deepcopy_CNN')
-        tensorflow.keras.backend.clear_session()
+        # tensorflow.keras.backend.clear_session()
         # ckpt_callback = ModelCheckpoint(filepath='weights.{epoch:02d}-{val_loss:.2f}.hdf5', monitor='val_loss')
 
         # base_estimator0 = load_model(base_estimator0_filename)
@@ -345,16 +378,13 @@ class AdaBoostClassifier(object):
         #
         # return estimator
 
-        checkpoint_path_file = checkpoint_function()
+        checkpoint_path_file, max_value = checkpoint_function(self.checkpoint_path)
         # this is interesting loop of the code. Code has been divided into conditions here
         # in the if condition if checkpoint is not none, then file and last epcoh is restored
         # Such file is loaded using load_model and training start from that epoch
         if checkpoint_path_file is not None:
             # Load model:
-            checkpoint_path_file = checkpoint_function()[0]
-            max_value = checkpoint_function()[1]
-
-            model = load_model(os.path.join(checkpoint_path, checkpoint_path_file))
+            model = load_model(os.path.join(self.checkpoint_path, checkpoint_path_file))
             # model.fit(X, y, epochs=150, batch_size=1, callbacks=[ckpt_callback], initial_epoch=max_value)
             # if there is no checkpoint_path_file it means no file is saved and hence model will be trained from scratch
             return model, max_value  # estimator

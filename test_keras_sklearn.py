@@ -11,6 +11,7 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 from sklearn.metrics import accuracy_score
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers import RMSprop
 import numpy as np
 
 
@@ -79,8 +80,8 @@ def summarize_diagnostics(history):
     # plot accuracy
     plt.subplot(212)
     plt.title('Classification Accuracy')
-    plt.plot(history.history['accuracy'], color='blue', label='train')
-    plt.plot(history.history['val_accuracy'], color='orange', label='test')
+    plt.plot(history.history['categorical_accuracy'], color='blue', label='train')
+    plt.plot(history.history['val_categorical_accuracy'], color='orange', label='test')
     # save plot to file
     filename = sys.argv[0].split('/')[-1]
     plt.savefig(filename + '_plot.png')
@@ -89,7 +90,8 @@ def summarize_diagnostics(history):
 
 # theano doesn't need any seed because it uses numpy.random.seed
 def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=None,
-              X_test=None, y_test=None, seed=100, input_shape=(32, 32, 3), num_classes=10):
+              X_test=None, y_test=None, seed=100, input_shape=(32, 32, 3), num_classes=10,
+              base_learning_rate=0.016):
     ######ranome seed
     np.random.seed(seed)
     # set_random_seed(seed)
@@ -97,6 +99,15 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
 
     model = model_func(input_shape=input_shape,
                        num_classes=num_classes)
+    # base_learning_rate *= 10
+    opt = RMSprop(learning_rate=base_learning_rate,
+                  rho=0.9,
+                  momentum=0.9,
+                  epsilon=0.0038,
+                  decay=1e-5)  # 0.0316
+    model.compile(optimizer=opt,  # Adam(learning_rate=0.001),
+                  loss='categorical_crossentropy',
+                  metrics=['categorical_accuracy'])
 
     lb = OneHotEncoder(sparse=False)
     y_train_b = y_train.reshape(len(y_train), 1)
@@ -112,15 +123,16 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
     def lr_step_decay(epoch, lr):
         drop_rate = 0.997
         epochs_drop = 2
-        return 0.008 * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+        return base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
 
     lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
 
+    sample_weight = np.ones(X_train.shape[0]) / X_train.shape[0]
     # fit model
     # history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size,
     #                     validation_data=(X_test, y_test_b), verbose=1)
     history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size, validation_data=(X_test, y_test_b),
-                        callbacks=[lr_callback], verbose=1)
+                        callbacks=[lr_callback], verbose=1, sample_weight=sample_weight)
 
     # evaluate model
     _, acc = model.evaluate(X_test, y_test_b, verbose=0)
@@ -129,17 +141,21 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
     summarize_diagnostics(history)
 
 
-def load_dataset():
+def load_dataset(config_filename, data_filename):
     # # load dataset
     # (trainX, trainY), (testX, testY) = cifar10.load_data()
     # # one hot encode target values
     # # trainY = to_categorical(trainY)
     # # testY = to_categorical(testY)
     # return trainX, trainY, testX, testY
+
+    if os.path.exists(data_filename):
+        return
+
     import mmcv
     from mmcls.datasets import build_dataset, build_dataloader
 
-    config_filename = './ganta_with_tower_state_bs32_forTest.py'
+    # config_filename = './ganta_with_tower_state_bs32_forTest.py'
     cfg = mmcv.Config.fromfile(config_filename)
     train_dataset = build_dataset(cfg.data.train)
     train_data_loader = build_dataloader(
@@ -202,8 +218,11 @@ def load_dataset():
     # train_ds_X, train_ds_y = train_ds.as_numpy_iterator()
     # print(len(train_ds_X), len(train_ds_y))
 
-    return trainX, trainY, testX, testY
-
+    with open(data_filename, 'wb') as fp:
+        pickle.dump({"trainX": trainX,
+                     "trainY": trainY,
+                     "testX": testX,
+                     "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
 
 # scale pixels
 def prep_pixels(train, test):
@@ -230,21 +249,18 @@ def main():
         batch_size = 256
         input_shape = (224, 224, 3)
         # load dataset
-        data_filename = './data.pickle'   # os.path.join(log_dir, 'data.pickle')
-        if os.path.exists(data_filename):
-            with open(data_filename, 'rb') as fp:
-                data = pickle.load(fp)
-            trainX = data['trainX']
-            trainY = data['trainY']
-            testX = data['testX']
-            testY = data['testY']
-        else:
-            trainX, trainY, testX, testY = load_dataset()
-            with open(data_filename, 'wb') as fp:
-                pickle.dump({"trainX": trainX,
-                             "trainY": trainY,
-                             "testX": testX,
-                             "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        config_filename = './ganta_with_tower_state_bs32_forTest.py'
+        data_filename = './data.pickle'  # os.path.join(log_dir, 'data.pickle')
+        if 'MobileNetV3' in arch:
+            config_filename = './ganta_with_tower_state_bs32_forTest_noNorm.py'
+            data_filename = './data_noNorm.pickle'  # os.path.join(log_dir, 'data.pickle')
+        load_dataset(config_filename, data_filename)
+        with open(data_filename, 'rb') as fp:
+            data = pickle.load(fp)
+        trainX = data['trainX']
+        trainY = data['trainY']
+        testX = data['testX']
+        testY = data['testY']
         # prepare pixel data
         # trainX, testX = prep_pixels(trainX, testX)
         # define model
@@ -273,10 +289,13 @@ def main():
 
     classes = np.unique(trainY)
     num_classes = len(classes)
+    base_learning_rate = 0.016
     if arch == 'MobileNetV3Small':
         batch_size = 256
+        base_learning_rate = 0.00625
     elif arch == 'MobileNetV3Large':
         batch_size = 128
+        base_learning_rate = 0.003125
 
     if train_adaboost_cnn == 1:
         # # # # # ###Adaboost+CNN:
@@ -291,7 +310,8 @@ def main():
             learning_rate=0.01,
             epochs=epochs,
             log_dir=log_dir,
-            classes=classes
+            classes=classes,
+            base_learning_rate=base_learning_rate
         )
 
         bdt_real_test_CNN.fit(trainX, trainY, batch_size)
@@ -310,13 +330,14 @@ def main():
         train_CNN(model_func=getattr(models, arch),    # models.VGG_Block_3_with_Dropout_BN,
                   X_train=trainX,
                   y_train=trainY,
-                  epochs=100,
+                  epochs=50,
                   batch_size=batch_size,
                   X_test=testX,
                   y_test=testY,
                   seed=seed,
                   input_shape=input_shape,
-                  num_classes=num_classes)
+                  num_classes=num_classes,
+                  base_learning_rate=base_learning_rate)
 
 
 if __name__ == '__main__':

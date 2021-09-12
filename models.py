@@ -200,13 +200,6 @@ def MobileNetV3Small(input_shape=(32, 32, 3), num_classes=10):
     model.add(Flatten())
     model.add(Activation(activation='softmax'))
 
-    opt = RMSprop(learning_rate=0.016,
-                  rho=0.9,
-                  momentum=0.9,
-                  epsilon=0.0076)  # 0.0316
-    model.compile(optimizer=opt, # Adam(learning_rate=0.001),
-                  loss='categorical_crossentropy',
-                  metrics=['accuracy'])
     return model
 
 
@@ -226,12 +219,4 @@ def MobileNetV3Large(input_shape=(32, 32, 3), num_classes=10):
     model.add(Flatten())
     model.add(Activation(activation='softmax'))
 
-    opt = RMSprop(learning_rate=0.008,
-                  rho=0.9,
-                  momentum=0.9,
-                  epsilon=0.0038,
-                  decay=1e-5)   # 0.0316
-    model.compile(optimizer=opt,  # Adam(learning_rate=0.001),
-                  loss='categorical_crossentropy',
-                  metrics=['accuracy'])
     return model
