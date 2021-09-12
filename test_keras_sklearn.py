@@ -1,4 +1,4 @@
-import sys,os,pickle
+import sys,os,glob,shutil,pickle,joblib
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 from tensorflow.keras.layers import Input
@@ -13,6 +13,7 @@ from sklearn.metrics import accuracy_score
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.optimizers import RMSprop
 import numpy as np
+from datetime import datetime
 
 
 # class_names = ('nontower', 'normal', 'jieduan', 'wanzhe')
@@ -62,12 +63,19 @@ tensorflow.random.set_seed(seed)
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from sklearn.utils import compute_class_weight, compute_sample_weight
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.datasets import cifar10
 import math
 
 import models
+
+
+def get_lr_metric(optimizer):
+    def lr(y_true, y_pred):
+        return optimizer.lr
+    return lr
 
 
 # plot diagnostic learning curves
@@ -91,7 +99,7 @@ def summarize_diagnostics(history):
 # theano doesn't need any seed because it uses numpy.random.seed
 def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=None,
               X_test=None, y_test=None, seed=100, input_shape=(32, 32, 3), num_classes=10,
-              base_learning_rate=0.016):
+              base_learning_rate=0.016, sample_weight_type=None):
     ######ranome seed
     np.random.seed(seed)
     # set_random_seed(seed)
@@ -105,9 +113,10 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
                   momentum=0.9,
                   epsilon=0.0038,
                   decay=1e-5)  # 0.0316
+    lr_metric = get_lr_metric(opt)
     model.compile(optimizer=opt,  # Adam(learning_rate=0.001),
                   loss='categorical_crossentropy',
-                  metrics=['categorical_accuracy'])
+                  metrics=['categorical_accuracy', lr_metric])
 
     lb = OneHotEncoder(sparse=False)
     y_train_b = y_train.reshape(len(y_train), 1)
@@ -120,23 +129,56 @@ def train_CNN(model_func, X_train=None, y_train=None, epochs=None, batch_size=No
     tensorflow.random.set_seed(seed)
     # set_random_seed(seed)
 
-    def lr_step_decay(epoch, lr):
-        drop_rate = 0.997
-        epochs_drop = 2
-        return base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+    # def lr_step_decay(epoch, lr):
+    #     drop_rate = 0.997
+    #     epochs_drop = 2
+    #     return base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+    #
+    # lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
 
-    lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
-
-    sample_weight = np.ones(X_train.shape[0]) / X_train.shape[0]
+    if sample_weight_type == 'ones':
+        sample_weight = np.ones(X_train.shape[0]) / X_train.shape[0]
+    elif sample_weight_type == 'random':
+        sample_weight = np.random.rand(X_train.shape[0])
+    elif sample_weight_type == 'random_min_norm':
+        sample_weight = np.random.rand(X_train.shape[0])
+        sample_weight_min = np.min(sample_weight)
+        if sample_weight_min != 0:
+            sample_weight /= sample_weight_min
+    elif sample_weight_type == 'random_min_max_norm':
+        sample_weight = np.random.rand(X_train.shape[0])
+        sample_weight[sample_weight < 0.1] = 0.1
+        sample_weight[sample_weight > 0.9] = 0.9
+        sample_weight /= 0.1
+    elif sample_weight_type == 'uniform':
+        class_weights = compute_class_weight(class_weight=None, classes=np.unique(y_train), y=y_train)
+        sample_weight = compute_sample_weight(class_weight=None, y=y_train)
+        print('balanced class_weights', class_weights, np.min(class_weights), np.max(class_weights))
+        print('balanced sample_weights', sample_weight, np.min(sample_weight), np.max(sample_weight))
+    elif sample_weight_type == 'balanced':
+        class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
+        sample_weight = compute_sample_weight(class_weight='balanced', y=y_train)
+        print('balanced class_weights', class_weights, np.min(class_weights), np.max(class_weights))
+        print('balanced sample_weights', sample_weight, np.min(sample_weight), np.max(sample_weight))
+    else:
+        sample_weight = None
+    if sample_weight is not None:
+        print('sample_weight_type', sample_weight_type)
+        print('sample_weight', np.min(sample_weight), np.max(sample_weight))
     # fit model
     # history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size,
     #                     validation_data=(X_test, y_test_b), verbose=1)
+    # history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size, validation_data=(X_test, y_test_b),
+    #                     callbacks=[lr_callback], verbose=1, sample_weight=sample_weight)
     history = model.fit(X_train, y_train_b, epochs=epochs, batch_size=batch_size, validation_data=(X_test, y_test_b),
-                        callbacks=[lr_callback], verbose=1, sample_weight=sample_weight)
+                        verbose=1, sample_weight=sample_weight)
 
     # evaluate model
-    _, acc = model.evaluate(X_test, y_test_b, verbose=0)
-    print('> %.3f' % (acc * 100.0))
+    result = model.evaluate(X_test, y_test_b, verbose=0)
+    print('result', result)
+    for i, metric_name in enumerate(model.metrics_names):
+        # print('> %.3f' % (acc * 100.0))
+        print(metric_name, result[i])
     # learning curves
     summarize_diagnostics(history)
 
@@ -224,6 +266,7 @@ def load_dataset(config_filename, data_filename):
                      "testX": testX,
                      "testY": testY}, fp, protocol=pickle.HIGHEST_PROTOCOL)
 
+
 # scale pixels
 def prep_pixels(train, test):
     # convert from integers to floats
@@ -236,22 +279,74 @@ def prep_pixels(train, test):
     return train_norm, test_norm
 
 
+# Save configuration information
+def save_args(args, save_path):
+    if not os.path.exists(save_path):
+        os.makedirs('%s' % save_path)
+
+    print('Config info -----')
+    for arg in vars(args):
+        print('%s: %s' % (arg, getattr(args, arg)))
+    with open('%s/args.txt' % save_path, 'w') as f:
+        for arg in vars(args):
+            print('%s: %s' % (arg, getattr(args, arg)), file=f)
+    joblib.dump(args, '%s/args.pkl' % save_path)
+    print('\033[0;33m================config infomation has been saved=================\033[0m')
+
+
+# Record the information printed in the terminal
+class Print_Logger(object):
+    def __init__(self, filename="Default.log"):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        pass
+# call by
+# sys.stdout = Logger(os.path.join(save_path,'test_log.txt'))
+
+
+def get_args():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--arch", type=str, default="MobileNetV3Small")
+    parser.add_argument("--dataset_name", type=str, default="ganta")
+    parser.add_argument("--train_adaboost_cnn", type=bool, default=0)
+    parser.add_argument("--sample_weight_type", type=str, default=None)
+    parser.add_argument("--base_learning_rate", type=float, default=0.001)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--epochs", type=int, default=50)
+    return parser.parse_args()
+
+
 def main():
-    arch = sys.argv[1]
-    dataset_name = sys.argv[2]
-    train_adaboost_cnn = int(sys.argv[3])
-    log_dir = os.path.join('logs', dataset_name, arch)
+    # arch = sys.argv[1]
+    # dataset_name = sys.argv[2]
+    # train_adaboost_cnn = int(sys.argv[3])
+    # sample_weight_type = sys.argv[4]
+    args = get_args()
+    log_dir = os.path.join('logs', args.dataset_name, args.arch, datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
+    sys.stdout = Print_Logger(os.path.join(log_dir, 'log.txt'))
+
+    save_args(args, log_dir)
+    for filename in glob.glob('*.py'):
+        if '_bak' not in filename:
+            shutil.copyfile(filename, os.path.join(log_dir, os.path.basename(filename)))
+
     trainX, trainY, testX, testY = None, None, None, None
-    if dataset_name == 'ganta':
-        batch_size = 256
+    if args.dataset_name == 'ganta':
         input_shape = (224, 224, 3)
         # load dataset
         config_filename = './ganta_with_tower_state_bs32_forTest.py'
         data_filename = './data.pickle'  # os.path.join(log_dir, 'data.pickle')
-        if 'MobileNetV3' in arch:
+        if 'MobileNetV3' in args.arch:
             config_filename = './ganta_with_tower_state_bs32_forTest_noNorm.py'
             data_filename = './data_noNorm.pickle'  # os.path.join(log_dir, 'data.pickle')
         load_dataset(config_filename, data_filename)
@@ -270,8 +365,8 @@ def main():
         print('testX shape', testX.shape)
         print('testY shape', testY.shape)
 
-        if trainX.shape[0] / batch_size != 0:
-            extra_num = int(np.ceil(trainX.shape[0] / batch_size) * batch_size - trainX.shape[0])
+        if trainX.shape[0] / args.batch_size != 0:
+            extra_num = int(np.ceil(trainX.shape[0] / args.batch_size) * args.batch_size - trainX.shape[0])
             trainX = np.concatenate([trainX, trainX[:extra_num, :]], axis=0)
             trainY = np.concatenate([trainY, trainY[:extra_num]], axis=0)
 
@@ -279,7 +374,7 @@ def main():
         print('trainY shape', trainY.shape)
         print('testX shape', testX.shape)
         print('testY shape', testY.shape)
-    elif dataset_name == 'cifar10':
+    elif args.dataset_name == 'cifar10':
         (trainX, trainY), (testX, testY) = cifar10.load_data()
         input_shape = (32, 32, 3)
         batch_size = 32
@@ -289,15 +384,15 @@ def main():
 
     classes = np.unique(trainY)
     num_classes = len(classes)
-    base_learning_rate = 0.016
-    if arch == 'MobileNetV3Small':
-        batch_size = 256
-        base_learning_rate = 0.00625
-    elif arch == 'MobileNetV3Large':
-        batch_size = 128
-        base_learning_rate = 0.003125
+    # base_learning_rate = 0.016
+    # if args.arch == 'MobileNetV3Small':
+    #     batch_size = 256
+    #     base_learning_rate = 0.00625
+    # elif args.arch == 'MobileNetV3Large':
+    #     batch_size = 128
+    #     base_learning_rate = 0.003125
 
-    if train_adaboost_cnn == 1:
+    if args.train_adaboost_cnn:
         # # # # # ###Adaboost+CNN:
 
         from multi_adaboost_CNN import AdaBoostClassifier as Ada_CNN
@@ -305,16 +400,16 @@ def main():
         n_estimators = 5
         epochs = 20
         bdt_real_test_CNN = Ada_CNN(
-            base_estimator=getattr(models, arch)(input_shape=input_shape, num_classes=num_classes),
+            base_estimator=getattr(models, args.arch)(input_shape=input_shape, num_classes=num_classes),
             n_estimators=n_estimators,
             learning_rate=0.01,
             epochs=epochs,
             log_dir=log_dir,
             classes=classes,
-            base_learning_rate=base_learning_rate
+            base_learning_rate=args.base_learning_rate
         )
 
-        bdt_real_test_CNN.fit(trainX, trainY, batch_size)
+        bdt_real_test_CNN.fit(trainX, trainY, args.batch_size)
         test_real_errors_CNN = bdt_real_test_CNN.estimator_errors_[:]
 
         y_pred_CNN = bdt_real_test_CNN.predict(trainX)
@@ -326,18 +421,18 @@ def main():
             accuracy_score(bdt_real_test_CNN.predict(testX), testY)))
 
     else:
-
-        train_CNN(model_func=getattr(models, arch),    # models.VGG_Block_3_with_Dropout_BN,
+        print('log_dir', log_dir)
+        train_CNN(model_func=getattr(models, args.arch),    # models.VGG_Block_3_with_Dropout_BN,
                   X_train=trainX,
                   y_train=trainY,
-                  epochs=50,
-                  batch_size=batch_size,
+                  epochs=args.epochs,
+                  batch_size=args.batch_size,
                   X_test=testX,
                   y_test=testY,
                   seed=seed,
                   input_shape=input_shape,
                   num_classes=num_classes,
-                  base_learning_rate=base_learning_rate)
+                  base_learning_rate=args.base_learning_rate)
 
 
 if __name__ == '__main__':

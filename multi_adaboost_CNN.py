@@ -46,6 +46,12 @@ def checkpoint_function(checkpoint_path):
     return final_file, max_value
 
 
+def get_lr_metric(optimizer):
+    def lr(y_true, y_pred):
+        return optimizer.lr
+    return lr
+
+
 class AdaBoostClassifier(object):
     '''
     Parameters
@@ -96,6 +102,7 @@ class AdaBoostClassifier(object):
             if keyword not in allowed_keys:
                 raise ValueError(keyword + ":  Wrong keyword used --- check spelling")
 
+        base_estimator = None
         n_estimators = 50
         learning_rate = 1
         algorithm = 'SAMME.R'
@@ -264,9 +271,10 @@ class AdaBoostClassifier(object):
                                                   momentum=0.9,
                                                   epsilon=0.0038,
                                                   decay=1e-5)  # 0.0316
+        lr_metric = get_lr_metric(opt)
         estimator.compile(optimizer=opt,  # Adam(learning_rate=0.001),
                           loss='categorical_crossentropy',
-                          metrics=['categorical_accuracy'])
+                          metrics=['categorical_accuracy', lr_metric])
 
         print('X', X.shape)
         print('y', y.shape)
@@ -280,13 +288,17 @@ class AdaBoostClassifier(object):
         print('sample_weight', sample_weight.shape)
 
         print('fitting estimator')
+        sample_weight_min = np.min(sample_weight)
+        if sample_weight_min == 0:
+            sample_weight_min = 1
+        sample_weight1 = sample_weight / sample_weight_min
 
         if max_value is None:
-            estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs,
+            estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs,
                           callbacks=[self.ckpt_callback, self.lr_callback],
                           batch_size=self.batch_size, verbose=1)
         else:
-            estimator.fit(X, y_b, sample_weight=sample_weight, epochs=self.epochs + max_value,
+            estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs + max_value,
                           callbacks=[self.ckpt_callback, self.lr_callback], initial_epoch=max_value,
                           batch_size=self.batch_size, verbose=1)
 
