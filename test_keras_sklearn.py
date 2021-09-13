@@ -44,8 +44,8 @@ from mmcls.datasets import build_dataset, build_dataloader
 
 # #####randome seed:
 # seed = 100
-seed = 50
-np.random.seed(seed)
+# seed = 50
+# np.random.seed(seed)
 # TensorFlow has its own random number generator
 # from tensorflow import set_random_seed
 # set_random_seed(seed)
@@ -60,7 +60,7 @@ if gpus:
     except RuntimeError as e:
         print(e)
 
-tensorflow.random.set_seed(seed)
+# tensorflow.random.set_seed(seed)
 # # ####
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -74,15 +74,64 @@ import math
 import models
 
 """
-CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py --sample_weight_type min_norm --base_learning_rate 0.00625 --arch MobileNetV3Small --batch_size 256 --epochs 100 --metrics accuracy
+CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.00625 \
+--arch MobileNetV3Small \
+--batch_size 256 \
+--epochs 100 \
+--metrics accuracy
 
-CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py --sample_weight_type min_norm --base_learning_rate 0.00625 --arch MobileNetV3Small --batch_size 256 --train_adaboost_cnn 1 --epochs 20 --n_estimators 5 --metrics accuracy
+CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.00625 \
+--arch MobileNetV3Small \
+--batch_size 256 \
+--train_type adaboost_cnn \
+--epochs 20 \
+--n_estimators 5 \
+--metrics accuracy
 
-CUDA_VISIBLE_DEVICES=0 python test_keras_sklearn.py --sample_weight_type min_norm --base_learning_rate 0.003125 --arch MobileNetV3Large --batch_size 128 --epochs 100 --metrics accuracy
+CUDA_VISIBLE_DEVICES=0 python test_keras_sklearn.py \
+--sample_weight_type min_max_norm \
+--base_learning_rate 0.00625 \
+--arch MobileNetV3Small \
+--batch_size 256 \
+--train_type adaboost_cnn \
+--epochs 20 \
+--n_estimators 5 \
+--metrics accuracy
 
-CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py --sample_weight_type min_norm --base_learning_rate 0.003125 --arch MobileNetV3Large --batch_size 128 --train_adaboost_cnn 1 --epochs 20 --n_estimators 5 --metrics accuracy
+CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.00625 \
+--arch MobileNetV3Small \
+--batch_size 256 \
+--train_type adaboost_cnn_single \
+--epochs 20 \
+--n_estimators 5 \
+--metrics accuracy \
+--model_filename /share/home/zhongzisha/AdaBoost_CNN/logs/ganta/MobileNetV3Small/2021_09_13_15_22_54/model_0.h5
 
+===========================================
 
+CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.003125 \
+--arch MobileNetV3Large \
+--batch_size 128 \
+--epochs 60 \
+--metrics accuracy
+
+CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.003125 \
+--arch MobileNetV3Large \
+--batch_size 128 \
+--train_type adaboost_cnn \
+--epochs 20 \
+--n_estimators 5 \
+--metrics accuracy
 """
 
 
@@ -330,12 +379,14 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--arch", type=str, default="MobileNetV3Small")
     parser.add_argument("--dataset_name", type=str, default="ganta")
-    parser.add_argument("--train_adaboost_cnn", type=bool, default=0)
+    parser.add_argument("--train_type", type=str, default="single_cnn")  # adaboost_cnn, adaboost_cnn_single, single_cnn
     parser.add_argument("--sample_weight_type", type=str, default=None)
     parser.add_argument("--base_learning_rate", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--n_estimators", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=100)
+    parser.add_argument("--model_filename", type=str, default="")
 
     parser.add_argument('--out', help='output result file')
     parser.add_argument(
@@ -374,15 +425,15 @@ def main():
         if '_bak' not in filename:
             shutil.copyfile(filename, os.path.join(log_dir, os.path.basename(filename)))
 
+    data_filename = './data.pickle'  # os.path.join(log_dir, 'data.pickle')
+    config_filename = './ganta_with_tower_state_bs32_forTest.py'
+    if 'MobileNetV3' in args.arch:
+        config_filename = './ganta_with_tower_state_bs32_forTest_noNorm.py'
+        data_filename = './data_noNorm.pickle'  # os.path.join(log_dir, 'data.pickle')
     trainX, trainY, testX, testY = None, None, None, None
     if args.dataset_name == 'ganta':
         input_shape = (224, 224, 3)
         # load dataset
-        config_filename = './ganta_with_tower_state_bs32_forTest.py'
-        data_filename = './data.pickle'  # os.path.join(log_dir, 'data.pickle')
-        if 'MobileNetV3' in args.arch:
-            config_filename = './ganta_with_tower_state_bs32_forTest_noNorm.py'
-            data_filename = './data_noNorm.pickle'  # os.path.join(log_dir, 'data.pickle')
         load_dataset(config_filename, data_filename)
         with open(data_filename, 'rb') as fp:
             data = pickle.load(fp)
@@ -426,7 +477,8 @@ def main():
     #     batch_size = 128
     #     base_learning_rate = 0.003125
 
-    if args.train_adaboost_cnn:
+    y_pred_prob = None
+    if args.train_type == 'adaboost_cnn':
         # # # # # ###Adaboost+CNN:
 
         from multi_adaboost_CNN import AdaBoostClassifier as Ada_CNN
@@ -436,12 +488,13 @@ def main():
         bdt_real_test_CNN = Ada_CNN(
             base_estimator=getattr(models, args.arch)(input_shape=input_shape, num_classes=num_classes),
             n_estimators=args.n_estimators,
-            learning_rate=0.01,
+            learning_rate=1,
             epochs=args.epochs,
             log_dir=log_dir,
             classes=classes,
             base_learning_rate=args.base_learning_rate,
-            sample_weight_type=args.sample_weight_type
+            sample_weight_type=args.sample_weight_type,
+            seed=args.seed
         )
 
         bdt_real_test_CNN.fit(trainX, trainY, args.batch_size)
@@ -461,74 +514,84 @@ def main():
         with open(os.path.join(log_dir, 'adaboost_cnn_val_results.pkl'), 'wb') as fp:
             pickle.dump(y_pred_prob, fp)
 
-    else:
+    elif args.train_type == 'adaboost_cnn_single':
+        model_filename = args.model_filename
+        single_model = tensorflow.keras.models.load_model(model_filename)
+        y_pred_prob = single_model.predict(testX, batch_size=args.batch_size)
+        with open(os.path.join(log_dir, 'cnn_val_results.pkl'), 'wb') as fp:
+            pickle.dump(y_pred_prob, fp)
+
+    elif args.train_type == 'single_cnn':
         print('log_dir', log_dir)
         cnn_model = train_CNN(model_func=getattr(models, args.arch),  # models.VGG_Block_3_with_Dropout_BN,
-                          X_train=trainX,
-                          y_train=trainY,
-                          epochs=args.epochs,
-                          batch_size=args.batch_size,
-                          X_test=testX,
-                          y_test=testY,
-                          seed=seed,
-                          input_shape=input_shape,
-                          num_classes=num_classes,
-                          base_learning_rate=args.base_learning_rate)
+                              X_train=trainX,
+                              y_train=trainY,
+                              epochs=args.epochs,
+                              batch_size=args.batch_size,
+                              X_test=testX,
+                              y_test=testY,
+                              seed=args.seed,
+                              input_shape=input_shape,
+                              num_classes=num_classes,
+                              base_learning_rate=args.base_learning_rate)
         y_pred_prob = cnn_model.predict(testX, batch_size=args.batch_size, verbose=1)
         # import pdb
         # pdb.set_trace()
         with open(os.path.join(log_dir, 'cnn_val_results.pkl'), 'wb') as fp:
             pickle.dump(y_pred_prob, fp)
 
-    # config_filename = './ganta_with_tower_state_bs32_forTest.py'
-    cfg = mmcv.Config.fromfile(config_filename)
-    cfg.data.val.test_mode = True
-    dataset = build_dataset(cfg.data.val)
-    outputs = [y_pred_prob[i] for i in range(len(y_pred_prob))]
+    if y_pred_prob is not None:
+        # config_filename = './ganta_with_tower_state_bs32_forTest.py'
+        cfg = mmcv.Config.fromfile(config_filename)
+        cfg.data.val.test_mode = True
+        dataset = build_dataset(cfg.data.val)
+        outputs = [y_pred_prob[i] for i in range(len(y_pred_prob))]
 
-    results = {}
-    if args.metrics:
-        eval_results = dataset.evaluate(outputs, args.metrics,
-                                        args.metric_options)
-        results.update(eval_results)
-        for k, v in eval_results.items():
-            print(f'\n{k} : {v:.2f}')
+        results = {}
+        if args.metrics:
+            eval_results = dataset.evaluate(outputs, args.metrics,
+                                            args.metric_options)
+            results.update(eval_results)
+            for k, v in eval_results.items():
+                print(f'\n{k} : {v:.2f}')
 
-    out_filename = os.path.join(log_dir, 'val_results.pkl')
-    scores = np.vstack(outputs)
-    pred_score = np.max(scores, axis=1)
-    pred_label = np.argmax(scores, axis=1)
-    pred_class = [dataset.CLASSES[lb] for lb in pred_label]
-    results.update({
-        'class_scores': scores,
-        'pred_score': pred_score,
-        'pred_label': pred_label,
-        'pred_class': pred_class
-    })
-    print(f'\ndumping results to {out_filename}')
-    mmcv.dump(results, out_filename)
+        out_filename = os.path.join(log_dir, 'val_results.pkl')
+        scores = np.vstack(outputs)
+        pred_score = np.max(scores, axis=1)
+        pred_label = np.argmax(scores, axis=1)
+        pred_class = [dataset.CLASSES[lb] for lb in pred_label]
+        results.update({
+            'class_scores': scores,
+            'pred_score': pred_score,
+            'pred_label': pred_label,
+            'pred_class': pred_class
+        })
+        print(f'\ndumping results to {out_filename}')
+        mmcv.dump(results, out_filename)
 
-    filenames = list()
-    for info in dataset.data_infos:
-        if info['img_prefix'] is not None:
-            filename = os.path.join(info['img_prefix'],
-                                    info['img_info']['filename'])
-        else:
-            filename = info['img_info']['filename']
-        filenames.append(filename)
-    gt_labels = list(dataset.get_gt_labels())
-    gt_classes = [dataset.CLASSES[x] for x in gt_labels]
+        filenames = list()
+        for info in dataset.data_infos:
+            if info['img_prefix'] is not None:
+                filename = os.path.join(info['img_prefix'],
+                                        info['img_info']['filename'])
+            else:
+                filename = info['img_info']['filename']
+            filenames.append(filename)
+        gt_labels = list(dataset.get_gt_labels())
+        gt_classes = [dataset.CLASSES[x] for x in gt_labels]
 
-    # load test results
-    outputs = mmcv.load(out_filename)
-    outputs['filename'] = filenames
-    outputs['gt_label'] = gt_labels
-    outputs['gt_class'] = gt_classes
+        # load test results
+        outputs = mmcv.load(out_filename)
+        outputs['filename'] = filenames
+        outputs['gt_label'] = gt_labels
+        outputs['gt_class'] = gt_classes
 
-    print(dataset.CLASSES)
-    from sklearn.metrics import confusion_matrix, classification_report
-    print(confusion_matrix(gt_labels, outputs['pred_label']))
-    print(classification_report(gt_labels, outputs['pred_label'], target_names=dataset.CLASSES))
+        print(dataset.CLASSES)
+        from sklearn.metrics import confusion_matrix, classification_report
+        print(confusion_matrix(gt_labels, outputs['pred_label']))
+        print(classification_report(gt_labels, outputs['pred_label'],
+                                    target_names=dataset.CLASSES,
+                                    digits=4))
 
 
 if __name__ == '__main__':

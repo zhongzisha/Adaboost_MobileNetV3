@@ -94,7 +94,8 @@ class AdaBoostClassifier(object):
                     learning_rate,algorithm,random_state''')
         allowed_keys = ['base_estimator', 'n_estimators', 'learning_rate',
                         'algorithm', 'random_state', 'epochs', 'log_dir',
-                        'classes', 'base_learning_rate', 'sample_weight_type']
+                        'classes', 'base_learning_rate', 'sample_weight_type',
+                        'seed']
         keywords_used = kwargs.keys()
         for keyword in keywords_used:
             if keyword not in allowed_keys:
@@ -111,6 +112,7 @@ class AdaBoostClassifier(object):
         classes = ("0", "1")
         base_learning_rate = 0.016
         sample_weight_type = 'none'
+        seed = 1024
 
         if kwargs and not args:
             if 'base_estimator' in kwargs:
@@ -127,6 +129,7 @@ class AdaBoostClassifier(object):
             if 'classes' in kwargs: classes = kwargs.pop('classes')
             if 'base_learning_rate' in kwargs: base_learning_rate = kwargs.pop('base_learning_rate')
             if 'sample_weight_type' in kwargs: sample_weight_type = kwargs.pop('sample_weight_type')
+            if 'seed' in kwargs: seed = kwargs.pop('seed')
 
 
         self.base_estimator_ = base_estimator
@@ -146,6 +149,7 @@ class AdaBoostClassifier(object):
         self.classes_ = classes
         self.base_learning_rate = base_learning_rate
         self.sample_weight_type = sample_weight_type
+        self.seed = seed
 
         checkpoint_path = os.path.join(log_dir, 'checkpoints')
         if not os.path.exists(checkpoint_path):
@@ -156,12 +160,12 @@ class AdaBoostClassifier(object):
                                              monitor='categorical_accuracy')
         self.checkpoint_path = checkpoint_path
 
-        def lr_step_decay(epoch, lr):
-            drop_rate = 0.997
-            epochs_drop = 3
-            return self.base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
-
-        self.lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
+        # def lr_step_decay(epoch, lr):
+        #     drop_rate = 0.997
+        #     epochs_drop = 3
+        #     return self.base_learning_rate * math.pow(drop_rate, math.floor(epoch / epochs_drop))
+        #
+        # self.lr_callback = tensorflow.keras.callbacks.LearningRateScheduler(lr_step_decay)
 
     def _samme_proba(self, estimator_filename, n_classes, X):
         """Calculate algorithm 4, step 2, equation c) of Zhu et al [1].
@@ -252,6 +256,12 @@ class AdaBoostClassifier(object):
             return self.real_boost(X, y, sample_weight)
 
     def real_boost(self, X, y, sample_weight):
+
+        ######ranome seed
+        np.random.seed(self.seed)
+        # set_random_seed(seed)
+        tensorflow.random.set_seed(self.seed)
+
         if sample_weight is None:
             sample_weight = np.ones(self.n_samples) / self.n_samples
         max_value = None
@@ -317,11 +327,11 @@ class AdaBoostClassifier(object):
 
         if max_value is None:
             estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs,
-                          callbacks=[self.ckpt_callback, self.lr_callback],
+                          callbacks=[self.ckpt_callback],   # self.lr_callback
                           batch_size=self.batch_size, verbose=1)
         else:
             estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs + max_value,
-                          callbacks=[self.ckpt_callback, self.lr_callback], initial_epoch=max_value,
+                          callbacks=[self.ckpt_callback], initial_epoch=max_value,
                           batch_size=self.batch_size, verbose=1)
 
         print('saving estimator')
