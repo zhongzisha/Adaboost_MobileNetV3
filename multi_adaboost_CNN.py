@@ -131,7 +131,6 @@ class AdaBoostClassifier(object):
             if 'sample_weight_type' in kwargs: sample_weight_type = kwargs.pop('sample_weight_type')
             if 'seed' in kwargs: seed = kwargs.pop('seed')
 
-
         self.base_estimator_ = base_estimator
         self.n_estimators_ = n_estimators
         self.learning_rate_ = learning_rate
@@ -304,12 +303,13 @@ class AdaBoostClassifier(object):
         if self.sample_weight_type == 'min_norm':
             # sample_weight = np.random.rand(X.shape[0])
             sample_weight_min = np.min(sample_weight)
+            print('sample_weight_min', sample_weight_min)
             if sample_weight_min != 0:
                 sample_weight1 = sample_weight / sample_weight_min
             else:
-                sample_weight1_min = np.min(sample_weight1[np.where(sample_weight1>0)])
+                sample_weight1_min = np.min(sample_weight1[np.where(sample_weight1 > 0)])
                 sample_weight1[np.where(sample_weight1 == 0)] = sample_weight1_min
-                sample_weight1 /= sample_weight_min
+                sample_weight1 /= sample_weight1_min
         elif self.sample_weight_type == 'min_max_norm':
             # sample_weight = np.random.rand(X.shape[0])
             if len(np.unique(sample_weight)) > 1:
@@ -327,7 +327,7 @@ class AdaBoostClassifier(object):
 
         if max_value is None:
             estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs,
-                          callbacks=[self.ckpt_callback],   # self.lr_callback
+                          callbacks=[self.ckpt_callback],  # self.lr_callback
                           batch_size=self.batch_size, verbose=1)
         else:
             estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs + max_value,
