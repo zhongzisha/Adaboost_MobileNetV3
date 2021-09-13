@@ -3,15 +3,12 @@ __author__ = 'Xin, Aboozar'
 import sys, os
 import numpy as np
 from numpy.core.umath_tests import inner1d
-from copy import deepcopy
-import tensorflow
-# kerase & CNN:
-# from keras import models as Models
 from tensorflow.keras.models import Sequential
 import tensorflow
 from sklearn.preprocessing import OneHotEncoder  # LabelBinarizer
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.optimizers import RMSprop
 import gc
 import math
 
@@ -49,6 +46,7 @@ def checkpoint_function(checkpoint_path):
 def get_lr_metric(optimizer):
     def lr(y_true, y_pred):
         return optimizer.lr
+
     return lr
 
 
@@ -96,7 +94,7 @@ class AdaBoostClassifier(object):
                     learning_rate,algorithm,random_state''')
         allowed_keys = ['base_estimator', 'n_estimators', 'learning_rate',
                         'algorithm', 'random_state', 'epochs', 'log_dir',
-                        'classes', 'base_learning_rate']
+                        'classes', 'base_learning_rate', 'sample_weight_type']
         keywords_used = kwargs.keys()
         for keyword in keywords_used:
             if keyword not in allowed_keys:
@@ -112,6 +110,7 @@ class AdaBoostClassifier(object):
         log_dir = '.'
         classes = ("0", "1")
         base_learning_rate = 0.016
+        sample_weight_type = 'none'
 
         if kwargs and not args:
             if 'base_estimator' in kwargs:
@@ -127,6 +126,8 @@ class AdaBoostClassifier(object):
             if 'log_dir' in kwargs: log_dir = kwargs.pop('log_dir')
             if 'classes' in kwargs: classes = kwargs.pop('classes')
             if 'base_learning_rate' in kwargs: base_learning_rate = kwargs.pop('base_learning_rate')
+            if 'sample_weight_type' in kwargs: sample_weight_type = kwargs.pop('sample_weight_type')
+
 
         self.base_estimator_ = base_estimator
         self.n_estimators_ = n_estimators
@@ -144,6 +145,7 @@ class AdaBoostClassifier(object):
         self.log_dir = log_dir
         self.classes_ = classes
         self.base_learning_rate = base_learning_rate
+        self.sample_weight_type = sample_weight_type
 
         checkpoint_path = os.path.join(log_dir, 'checkpoints')
         if not os.path.exists(checkpoint_path):
@@ -266,15 +268,15 @@ class AdaBoostClassifier(object):
         # lb=LabelBinarizer()
         # y_b = lb.fit_transform(y)
 
-        opt = tensorflow.keras.optimizers.RMSprop(learning_rate=self.base_learning_rate,
-                                                  rho=0.9,
-                                                  momentum=0.9,
-                                                  epsilon=0.0038,
-                                                  decay=1e-5)  # 0.0316
-        lr_metric = get_lr_metric(opt)
+        opt = RMSprop(learning_rate=self.base_learning_rate,
+                      rho=0.9,
+                      momentum=0.9,
+                      epsilon=0.0038,
+                      decay=1e-5)  # 0.0316
+        # lr_metric = get_lr_metric(opt)
         estimator.compile(optimizer=opt,  # Adam(learning_rate=0.001),
                           loss='categorical_crossentropy',
-                          metrics=['categorical_accuracy', lr_metric])
+                          metrics=['categorical_accuracy'])
 
         print('X', X.shape)
         print('y', y.shape)
@@ -288,10 +290,30 @@ class AdaBoostClassifier(object):
         print('sample_weight', sample_weight.shape)
 
         print('fitting estimator')
-        sample_weight_min = np.min(sample_weight)
-        if sample_weight_min == 0:
-            sample_weight_min = 1
-        sample_weight1 = sample_weight / sample_weight_min
+        sample_weight1 = np.copy(sample_weight)
+        if self.sample_weight_type == 'min_norm':
+            # sample_weight = np.random.rand(X.shape[0])
+            sample_weight_min = np.min(sample_weight)
+            if sample_weight_min != 0:
+                sample_weight1 = sample_weight / sample_weight_min
+            else:
+                sample_weight1_min = np.min(sample_weight1[np.where(sample_weight1>0)])
+                sample_weight1[np.where(sample_weight1 == 0)] = sample_weight1_min
+                sample_weight1 /= sample_weight_min
+        elif self.sample_weight_type == 'min_max_norm':
+            # sample_weight = np.random.rand(X.shape[0])
+            if len(np.unique(sample_weight)) > 1:
+                sample_weight_min = np.min(sample_weight1)
+                sample_weight_max = np.max(sample_weight1)
+                ratio = 9.0 / (sample_weight_max - sample_weight_min)
+                sample_weight1 -= sample_weight_min
+                sample_weight1 = 1 + ratio * sample_weight1  # [xmin, xmax] --> [1, 10]
+            else:
+                sample_weight1 = np.ones_like(sample_weight)
+
+        if sample_weight1 is not None:
+            print('sample_weight_type', self.sample_weight_type)
+            print('sample_weight', np.min(sample_weight1), np.max(sample_weight1))
 
         if max_value is None:
             estimator.fit(X, y_b, sample_weight=sample_weight1, epochs=self.epochs,
