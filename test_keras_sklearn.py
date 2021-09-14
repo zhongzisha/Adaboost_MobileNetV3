@@ -93,6 +93,16 @@ CUDA_VISIBLE_DEVICES=1 python test_keras_sklearn.py \
 --metrics accuracy
 
 CUDA_VISIBLE_DEVICES=0 python test_keras_sklearn.py \
+--sample_weight_type min_norm \
+--base_learning_rate 0.00625 \
+--arch MobileNetV3Small \
+--batch_size 256 \
+--train_type adaboost_cnn_v2 \
+--epochs 20 \
+--n_estimators 5 \
+--metrics accuracy
+
+CUDA_VISIBLE_DEVICES=0 python test_keras_sklearn.py \
 --sample_weight_type min_max_norm \
 --base_learning_rate 0.00625 \
 --arch MobileNetV3Small \
@@ -382,6 +392,7 @@ def get_args():
     parser.add_argument("--train_type", type=str, default="single_cnn")  # adaboost_cnn, adaboost_cnn_single, single_cnn
     parser.add_argument("--sample_weight_type", type=str, default=None)
     parser.add_argument("--base_learning_rate", type=float, default=0.001)
+    parser.add_argument("--adaboost_learning_rate", type=float, default=0.1)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--n_estimators", type=int, default=5)
@@ -488,7 +499,43 @@ def main():
         bdt_real_test_CNN = Ada_CNN(
             base_estimator=getattr(models, args.arch)(input_shape=input_shape, num_classes=num_classes),
             n_estimators=args.n_estimators,
-            learning_rate=1,
+            learning_rate=args.adaboost_learning_rate,
+            epochs=args.epochs,
+            log_dir=log_dir,
+            classes=classes,
+            base_learning_rate=args.base_learning_rate,
+            sample_weight_type=args.sample_weight_type,
+            seed=args.seed
+        )
+
+        bdt_real_test_CNN.fit(trainX, trainY, args.batch_size)
+        test_real_errors_CNN = bdt_real_test_CNN.estimator_errors_[:]
+
+        y_pred_CNN = bdt_real_test_CNN.predict(trainX)
+        print('\n Training accuracy of bdt_real_test_CNN (AdaBoost+CNN): {}'.format(
+            accuracy_score(bdt_real_test_CNN.predict(trainX), trainY)))
+
+        y_pred_CNN = bdt_real_test_CNN.predict(testX)
+        print('\n Testing accuracy of bdt_real_test_CNN (AdaBoost+CNN): {}'.format(
+            accuracy_score(bdt_real_test_CNN.predict(testX), testY)))
+
+        y_pred_prob = bdt_real_test_CNN.predict_proba(testX)
+        # import pdb
+        # pdb.set_trace()
+        with open(os.path.join(log_dir, 'adaboost_cnn_val_results.pkl'), 'wb') as fp:
+            pickle.dump(y_pred_prob, fp)
+
+    elif args.train_type == 'adaboost_cnn_v2':
+        # # # # # ###Adaboost+CNN:
+
+        from multi_adaboost_CNN import AdaBoostClassifierV2 as Ada_CNN
+
+        # n_estimators = 5
+        # epochs = 20
+        bdt_real_test_CNN = Ada_CNN(
+            base_estimator=getattr(models, args.arch)(input_shape=input_shape, num_classes=num_classes),
+            n_estimators=args.n_estimators,
+            learning_rate=args.adaboost_learning_rate,
             epochs=args.epochs,
             log_dir=log_dir,
             classes=classes,
